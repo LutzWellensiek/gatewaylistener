@@ -1,132 +1,186 @@
-# Gateway Listener - LoRaWAN Endnode Verbindungsanleitung
+# 🌐 LoRaWAN Gateway Monitor
 
-## Übersicht
-Dieses Repository enthält Tools und Anleitungen für die Verbindung von LoRaWAN-Endnodes mit einem ChirpStack-Gateway.
+**Ein intelligenter All-in-One Monitor für LoRaWAN-Gateways mit ChirpStack**
 
-## Inhalt
-- `chirpstack_mqtt_listener.py` - Python-Skript zum Überwachen von MQTT-Nachrichten vom ChirpStack
+Dieses Python-Skript kombiniert Service-Überwachung, automatisches Starten von Gateway-Komponenten und Echtzeit-Datenmonitoring in einem einzigen Tool.
 
-## Endnode Verbindungsanleitung
+## 🚀 Features
 
-### 1. Voraussetzungen
-- ChirpStack Gateway Bridge läuft auf dem Gateway
-- ChirpStack Server ist konfiguriert und läuft
-- Endnode (z.B. ESP32 mit LoRa-Modul) ist programmiert
+- **🔍 Automatische Service-Erkennung**: Prüft alle kritischen LoRaWAN-Services
+- **⚡ Auto-Start Funktion**: Startet ausgefallene Services automatisch neu
+- **📡 Real-time MQTT Monitoring**: Empfängt und zeigt alle LoRa-Nachrichten live an
+- **📊 Serial Monitor Ausgabe**: Formatierte Ausgabe aller empfangenen Daten
+- **🛠️ Zero-Configuration**: Läuft out-of-the-box ohne weitere Konfiguration
 
-### 2. ChirpStack Konfiguration
+## 📋 Überwachte Komponenten
 
-#### Application erstellen
-1. Öffnen Sie die ChirpStack Web-Oberfläche (normalerweise http://gateway-ip:8080)
-2. Gehen Sie zu "Applications"
-3. Klicken Sie auf "Create" um eine neue Application zu erstellen
-4. Geben Sie einen Namen ein (z.B. "IoT-Sensoren")
-5. Speichern Sie die Application
+| Service | Beschreibung | Auto-Start |
+|---------|--------------|------------|
+| 🦟 **Mosquitto** | MQTT Broker für ChirpStack | ✅ |
+| 🌉 **ChirpStack Gateway Bridge** | Verbindung zwischen Packet Forwarder und ChirpStack | ✅ |
+| 📦 **Packet Forwarder** | SX1302/1303 LoRa Packet Forwarder | ✅ |
 
-#### Device Profile erstellen
-1. Gehen Sie zu "Device profiles"
-2. Klicken Sie auf "Create"
-3. Konfigurieren Sie das Profil:
-   - Name: z.B. "ESP32-LoRa-Profile"
-   - LoRaWAN MAC version: 1.0.3 (oder entsprechend Ihrem Endnode)
-   - Regional Parameters revision: A
-   - Uplink interval: je nach Bedarf (z.B. 60 Sekunden)
-   - ADR enabled: aktivieren für adaptive Datenrate
-4. Speichern Sie das Profil
+## 🔧 Installation & Setup
 
-#### Device hinzufügen
-1. Gehen Sie zu Ihrer Application
-2. Klicken Sie auf "Create" unter Devices
-3. Geben Sie die Device-Informationen ein:
-   - Name: Beschreibender Name für Ihr Gerät
-   - Device EUI: 64-bit Identifier Ihres Endnodes
-   - Application key: 128-bit AES Key (wird auf dem Endnode verwendet)
-4. Wählen Sie das zuvor erstellte Device Profile
-5. Speichern Sie das Device
+### Voraussetzungen
+- Raspberry Pi mit installiertem ChirpStack
+- Python 3.7+
+- Konfigurierter SX1302/SX1303 LoRa Concentrator
 
-### 3. Endnode Programmierung
+### Installation
+```bash
+# Repository klonen
+git clone https://github.com/LutzWellensiek/gatewaylistener.git
+cd gatewaylistener
 
-#### Beispiel-Konfiguration für ESP32 mit LMIC Library:
-```cpp
-// Device EUI (8 bytes, little-endian)
-static const u1_t PROGMEM DEVEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+# Python-Abhängigkeiten installieren
+pip3 install paho-mqtt
 
-// Application EUI (8 bytes, little-endian) 
-static const u1_t PROGMEM APPEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-// Application Key (16 bytes)
-static const u1_t PROGMEM APPKEY[16] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+# Skript direkt ausführen
+python3 lorawan_gateway_monitor.py
 ```
 
-**Wichtig:** Ersetzen Sie die Null-Werte mit den tatsächlichen Werten aus ChirpStack!
+## 🏃‍♂️ Verwendung
 
-### 4. Verbindung testen
-
-#### Gateway Status prüfen:
+### Einfacher Start
 ```bash
-# ChirpStack Gateway Bridge Status
-sudo systemctl status chirpstack-gateway-bridge
+python3 lorawan_gateway_monitor.py
+```
 
-# ChirpStack Server Status  
+### Als Service (dauerhaft im Hintergrund)
+```bash
+# Service-Datei erstellen
+sudo nano /etc/systemd/system/lorawan-monitor.service
+
+# Service aktivieren
+sudo systemctl enable lorawan-monitor.service
+sudo systemctl start lorawan-monitor.service
+```
+
+## 📺 Ausgabe-Beispiel
+
+```
+🚀 LoRaWAN Gateway Monitor gestartet
+============================================================
+🔍 LoRaWAN SYSTEM CHECK
+============================================================
+
+📋 Service Status:
+   mosquitto: ✅ AKTIV
+   chirpstack-gateway-bridge: ✅ AKTIV
+   lora_pkt_fwd: ✅ LÄUFT
+
+🌐 Connectivity Check:
+   MQTT Broker: ✅ ERREICHBAR
+
+🎉 Alle Services sind bereit!
+============================================================
+
+📡 Verbunden mit MQTT Broker (localhost:1883)
+🎯 Lausche auf Topic: application/+/device/+/event/+
+
+============================================================
+📊 LIVE DATA MONITOR - Warte auf LoRa-Nachrichten...
+============================================================
+
+============================================================
+🕐 2024-03-15 14:30:47
+📱 App: 1 | 🔷 Device: 1234567890abcdef | 📊 Type: up
+============================================================
+📈 UPLINK DATA:
+   📊 Frame Count: 42
+   🚪 Port: 1
+   📦 Raw (Base64): SGVsbG8gV29ybGQ=
+   🔢 Hex: 48656C6C6F20576F726C64
+   📋 Bytes: [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]
+   📝 ASCII: 'Hello World'
+   📡 Gateway Info:
+      📶 gateway-001... | RSSI: -85dBm | SNR: 7.5dB
+```
+
+## ⚙️ Konfiguration
+
+Das Skript verwendet standardmäßig folgende Einstellungen:
+
+```python
+MQTT_BROKER = "localhost"
+MQTT_PORT = 1883
+MQTT_TOPIC = "application/+/device/+/event/+"
+PACKET_FORWARDER_PATH = "/home/pi/sx1302_hal/packet_forwarder"
+```
+
+Diese können bei Bedarf im Skript angepasst werden.
+
+## 🐛 Troubleshooting
+
+### Häufige Probleme
+
+**Problem**: Services starten nicht automatisch
+```bash
+# Prüfe Berechtigungen
+sudo usermod -aG sudo pi
+```
+
+**Problem**: Packet Forwarder nicht gefunden
+```bash
+# Pfad anpassen in der Konfiguration
+PACKET_FORWARDER_PATH = "/dein/pfad/zum/packet_forwarder"
+```
+
+**Problem**: Keine MQTT-Nachrichten
+```bash
+# ChirpStack prüfen
 sudo systemctl status chirpstack
-
-# MQTT Nachrichten überwachen
-python3 chirpstack_mqtt_listener.py
+curl http://localhost:8080
 ```
 
-#### Logs überprüfen:
-```bash
-# Gateway Bridge Logs
-sudo journalctl -u chirpstack-gateway-bridge -f
+## 🛡️ Service-Datei Beispiel
 
-# ChirpStack Server Logs
-sudo journalctl -u chirpstack -f
+```ini
+[Unit]
+Description=LoRaWAN Gateway Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/gatewaylistener
+ExecStart=/usr/bin/python3 lorawan_gateway_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-### 5. Troubleshooting
+## 📂 Repository-Inhalt
 
-#### Häufige Probleme:
-1. **Endnode sendet, aber wird nicht empfangen:**
-   - Prüfen Sie die Frequenz-Einstellungen (EU868, US915, etc.)
-   - Überprüfen Sie die Reichweite zwischen Gateway und Endnode
-   - Kontrollieren Sie die Spreading Factor (SF) Einstellungen
+- **`lorawan_gateway_monitor.py`** - Hauptskript (NEU, kombiniert alle Funktionen)
+- **`chirpstack_mqtt_listener.py`** - Legacy MQTT Listener
+- **`Gateway_Check.py`** - Legacy Service Checker  
+- **`lorawan_system_monitor.py`** - Legacy System Monitor
 
-2. **Join-Request schlägt fehl:**
-   - Überprüfen Sie DevEUI, AppEUI und AppKey
-   - Stellen Sie sicher, dass das Device in ChirpStack aktiviert ist
-   - Prüfen Sie die LoRaWAN-Version Kompatibilität
+> **Empfehlung**: Verwende das neue `lorawan_gateway_monitor.py` - es kombiniert alle Funktionen der Legacy-Skripte in einem optimierten Tool.
 
-3. **Keine Nachrichten in ChirpStack:**
-   - Überprüfen Sie die Gateway-Verbindung
-   - Kontrollieren Sie die MQTT-Broker Konfiguration
-   - Prüfen Sie die Firewall-Einstellungen
+## 🤝 Contributing
 
-### 6. Monitoring
+Beiträge sind willkommen! Bitte:
 
-Das beiliegende Python-Skript `chirpstack_mqtt_listener.py` kann verwendet werden, um:
-- MQTT-Nachrichten vom ChirpStack zu überwachen
-- Join-Requests und Uplink-Nachrichten zu protokollieren
-- Debugging-Informationen zu sammeln
+1. Forke das Repository
+2. Erstelle einen Feature-Branch (`git checkout -b feature/AmazingFeature`)
+3. Committe deine Änderungen (`git commit -m 'Add some AmazingFeature'`)
+4. Pushe zum Branch (`git push origin feature/AmazingFeature`)
+5. Öffne eine Pull Request
 
-#### Verwendung:
-```bash
-python3 chirpstack_mqtt_listener.py
-```
+## 📝 License
 
-### 7. Nützliche Befehle
+Dieses Projekt steht unter der MIT License. Siehe `LICENSE` Datei für Details.
 
-```bash
-# Gateway Bridge Konfiguration anzeigen
-cat /etc/chirpstack-gateway-bridge/chirpstack-gateway-bridge.toml
+## 👤 Autor
 
-# ChirpStack Konfiguration anzeigen
-cat /etc/chirpstack/chirpstack.toml
+**Lutz Wellensiek**
+- GitHub: [@LutzWellensiek](https://github.com/LutzWellensiek)
 
-# MQTT Topics anzeigen
-mosquitto_sub -h localhost -t "gateway/+/event/+"
-```
+---
 
-## Support
-Bei Problemen überprüfen Sie die offiziellen ChirpStack Dokumentation: https://www.chirpstack.io/docs/
-
-## Lizenz
-Dieses Projekt steht unter der MIT-Lizenz.
+⭐ Wenn dir dieses Projekt gefällt, gib ihm einen Star auf GitHub!
