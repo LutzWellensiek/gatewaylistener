@@ -1,0 +1,1 @@
+timestamp,session_id,application_id,device_eui,event_type,fcnt,fport,raw_data_hex,raw_data_ascii,decoded_payload,gateway_id,rssi_dbm,snr_db,spreading_factor,bandwidth,frequency,gateway_lat,gateway_lon,gateway_alt,device_lat,device_lon,device_alt,battery_level,margin_db,acknowledged,gps_source,gps_format
