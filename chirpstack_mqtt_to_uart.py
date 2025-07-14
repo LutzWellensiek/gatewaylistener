@@ -72,6 +72,7 @@ class ChirpStackMQTTtoUART:
             
             # Erstelle UART Nachricht nur mit relevanten Daten
             uart_message = {
+                'msg_id': self.messages_received,  # Eindeutige Message-ID für ACK
                 'timestamp': timestamp,
                 'type': 'uplink_data',
                 'data': self.extract_uplink_data(payload)
@@ -176,6 +177,15 @@ class ChirpStackMQTTtoUART:
             
             self.messages_sent += 1
             print(f"  -> UART gesendet ({len(message)} bytes)")
+            
+            # Warte kurz auf ACK (optional)
+            time.sleep(0.1)
+            if self.ser.in_waiting > 0:
+                response = self.ser.readline().decode('utf-8').strip()
+                if response.startswith("ACK:"):
+                    print(f"  <- ACK empfangen: {response}")
+                else:
+                    print(f"  <- Antwort: {response}")
             
         except Exception as e:
             print(f"Fehler beim Senden über UART: {e}")
