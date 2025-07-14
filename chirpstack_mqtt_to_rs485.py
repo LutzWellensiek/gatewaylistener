@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-ChirpStack MQTT to RS485 Bridge - Nur Sensordaten
-Sendet nur die Sensordaten (d-Array) über RS485
+ChirpStack MQTT to RS485 Bridge
+Empfängt LoRaWAN-Daten vom ChirpStack MQTT Forwarder 
+und leitet sie über RS485 weiter im korrekten Frame-Format
 """
 
 import serial
@@ -9,11 +10,12 @@ import paho.mqtt.client as mqtt
 import json
 import time
 import base64
+import struct
 from datetime import datetime
 
 class ChirpStackMQTTtoRS485:
     def __init__(self, mqtt_broker="localhost", mqtt_port=1883, 
-                 rs485_port='/dev/ttyUSB0', rs485_baudrate=115200):
+                 rs485_port='COM3', rs485_baudrate=115200):
         # RS485 Setup
         self.ser = serial.Serial(rs485_port, rs485_baudrate, timeout=1)
         print(f"RS485 initialisiert auf {rs485_port} mit {rs485_baudrate} baud")
@@ -31,6 +33,9 @@ class ChirpStackMQTTtoRS485:
         # Statistiken
         self.messages_received = 0
         self.messages_sent = 0
+        
+        # Frame-Sequenznummer für RS485
+        self.frame_sequence = 0
         
     def on_mqtt_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -57,15 +62,12 @@ class ChirpStackMQTTtoRS485:
                 print(f"Überspringe Nachricht ohne Nutzdaten")
                 return
             
-            # Extrahiere nur Sensordaten (d-Array)
+            # Extrahiere Sensordaten aus LoRaWAN Payload
             sensor_data = self.extract_sensor_data(payload)
             
-            if sensor_data is None:
-                print("Keine Sensordaten (d-Array) verfügbar")
-                return
-            
-            # Sende nur Sensordaten über RS485
-            self.send_rs485(sensor_data)
+            if sensor_data:
+                # Sende Sensordaten über RS485
+                self.send_rs485_sensor_data(sensor_data)
             
             # Log
             timestamp = datetime.now().isoformat()
@@ -95,46 +97,156 @@ class ChirpStackMQTTtoRS485:
         return True
     
     def extract_sensor_data(self, payload):
-        if 'object' in payload and payload['object']:
-            decoded_obj = payload['object']
+        """Extrahiert Sensordaten aus der LoRaWAN Payload"""
+        try:
+            # Dekodiere Base64 Payload
+            data_bytes = base64.b64decode(payload['data'])
             
-            if 'd' in decoded_obj and isinstance(decoded_obj['d'], list):
-                return decoded_obj['d']
-        
-        if 'data' in payload:
+            # Versuche JSON-Format zu parsen (falls kompakte JSON-Übertragung)
             try:
-                data_bytes = base64.b64decode(payload['data'])
-                data_str = data_bytes.decode('utf-8')
-                decoded_data = json.loads(data_str)
+                json_str = data_bytes.decode('utf-8')
+                json_data = json.loads(json_str)
                 
-                if 'd' in decoded_data and isinstance(decoded_data['d'], list):
-                    return decoded_data['d']
+                # Erwarte Format: {"d":[temp1,temp2,deflection,pressure],"id":"device_id","t":timestamp}
+                if 'd' in json_data and isinstance(json_data['d'], list):
+                    sensor_values = json_data['d']
+                    device_id = json_data.get('id', 'unknown')
                     
-            except:
+                    # Konvertiere in Struktur für RS485
+                    sensor_data = {
+                        'device_id': device_id,
+                        'timestamp': int(time.time()),
+                        'temp1': sensor_values[0] if len(sensor_values) > 0 else 0.0,
+                        'temp2': sensor_values[1] if len(sensor_values) > 1 else 0.0,
+                        'deflection': sensor_values[2] if len(sensor_values) > 2 else 0.0,
+                        'pressure': sensor_values[3] if len(sensor_values) > 3 else 0.0,
+                        'deflection_2': sensor_values[4] if len(sensor_values) > 4 else 0.0
+                    }
+                    
+                    return sensor_data
+                    
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 pass
-        
+            
+            # Falls kein JSON, versuche binäre Dekodierung
+            if len(data_bytes) >= 16:  # Mindestens 4 float-Werte
+                # Erwarte Little-Endian float-Werte
+                values = struct.unpack('<ffff', data_bytes[:16])
+                
+                sensor_data = {
+                    'device_id': payload.get('deviceInfo', {}).get('devEui', 'unknown'),
+                    'timestamp': int(time.time()),
+                    'temp1': values[0],
+                    'temp2': values[1],
+                    'deflection': values[2],
+                    'pressure': values[3],
+                    'deflection_2': 0.0
+                }
+                
+                return sensor_data
+                
+        except Exception as e:
+            print(f"Fehler beim Extrahieren der Sensordaten: {e}")
+            
         return None
     
-    def send_rs485(self, data):
+    def calculate_crc8(self, data):
+        """Berechnet CRC8 für RS485-Frame (vereinfachte Version)"""
+        crc = 0
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x80:
+                    crc = (crc << 1) ^ 0x07
+                else:
+                    crc <<= 1
+                crc &= 0xFF
+        return crc
+    
+    def send_rs485_sensor_data(self, sensor_data):
+        """Sendet Sensordaten über RS485 im erwarteten Format"""
         try:
-            json_data = json.dumps(data, separators=(',', ':'))
-            message = json_data + '\n'
+            # Sende verschiedene Sensorwerte als separate RS485-Frames
+            # Format: [INPUT_ID][DATA_HIGH][DATA_LOW][CRC8]
             
-            self.ser.write(message.encode('utf-8'))
-            self.ser.flush()
+            # Definiere Input-IDs (aus der C++-Datei)
+            INPUT_IDS = {
+                'IN1': 0x01,      # Temp1
+                'IN2': 0x02,      # Temp2
+                'IN3': 0x03,      # Deflection
+                'IN4': 0x04,      # Pressure
+                'IN9': 0x09       # Internal temp (für Tests)
+            }
+            
+            # Sende Temp1
+            self.send_rs485_frame(INPUT_IDS['IN1'], sensor_data['temp1'])
+            time.sleep(0.05)  # Kurze Pause zwischen Frames
+            
+            # Sende Temp2
+            self.send_rs485_frame(INPUT_IDS['IN2'], sensor_data['temp2'])
+            time.sleep(0.05)
+            
+            # Sende Deflection
+            self.send_rs485_frame(INPUT_IDS['IN3'], sensor_data['deflection'])
+            time.sleep(0.05)
+            
+            # Sende Pressure (falls verfügbar)
+            if sensor_data['pressure'] != 0.0:
+                self.send_rs485_frame(INPUT_IDS['IN4'], sensor_data['pressure'])
+                time.sleep(0.05)
             
             self.messages_sent += 1
-            print(f"  -\u003e RS485 gesendet ({len(message)} bytes): {json_data}")
+            print(f"  -> RS485 Sensordaten gesendet")
             
         except Exception as e:
             print(f"Fehler beim Senden über RS485: {e}")
     
+    def send_rs485_frame(self, input_id, value):
+        """Sendet einen einzelnen RS485-Frame"""
+        try:
+            # Konvertiere float-Wert in 12-Bit-Wert (0-4095)
+            # Skalierung je nach Sensor anpassen
+            if input_id in [0x01, 0x02]:  # Temperatur
+                # Temperatur: -40°C bis +85°C -> 0-4095
+                scaled_value = int(((value + 40) / 125.0) * 4095)
+            elif input_id == 0x03:  # Deflection
+                # Deflection: -20° bis +20° -> 0-4095
+                scaled_value = int(((value + 20) / 40.0) * 4095)
+            elif input_id == 0x04:  # Pressure
+                # Pressure: -1.0 bis +0.6 bar -> 0-4095
+                scaled_value = int(((value + 1.0) / 1.6) * 4095)
+            else:
+                scaled_value = int(value) & 0x0FFF
+            
+            # Begrenze auf 12-Bit
+            scaled_value = max(0, min(4095, scaled_value))
+            
+            # Erstelle Frame: [INPUT_ID][DATA_HIGH][DATA_LOW][CRC8]
+            data_high = (scaled_value >> 4) & 0xFF
+            data_low = (scaled_value & 0x0F) << 4
+            
+            frame = bytearray([input_id, data_high, data_low])
+            
+            # Berechne CRC8
+            crc = self.calculate_crc8(frame)
+            frame.append(crc)
+            
+            # Sende Frame
+            self.ser.write(frame)
+            self.ser.flush()
+            
+            print(f"    Frame gesendet: ID={input_id:02X}, Wert={value:.2f}, Skaliert={scaled_value}, Frame={frame.hex()}")
+            
+        except Exception as e:
+            print(f"Fehler beim Senden des RS485-Frames: {e}")
+    
     def run(self):
-        print("\nChirpStack MQTT to RS485 Bridge (Nur Sensordaten)")
+        print("\nChirpStack MQTT to RS485 Bridge")
         print("=" * 50)
         print(f"MQTT Broker: {self.mqtt_broker}:{self.mqtt_port}")
         print(f"RS485 Port: {self.ser.port}")
-        print("Filter: Nur 'd' Array aus Sensordaten")
+        print("Filter: Nur tatsächlich empfangene Sensor-Daten")
+        print("Ausgabe: RS485-Frames für Mikrocontroller")
         print("=" * 50)
         
         try:
@@ -158,9 +270,9 @@ class ChirpStackMQTTtoRS485:
         print("Verbindungen geschlossen.")
 
 def main():
-    MQTT_BROKER = "localhost"
+    MQTT_BROKER = "localhost"  # ChirpStack MQTT Broker
     MQTT_PORT = 1883
-    RS485_PORT = '/dev/ttyAMA0'
+    RS485_PORT = 'COM3'  # Windows COM-Port für USB-to-RS485 Adapter
     RS485_BAUDRATE = 115200
     
     bridge = ChirpStackMQTTtoRS485(
