@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ChirpStack MQTT to UART Bridge
-Empfängt LoRaWAN-Daten vom ChirpStack MQTT Forwarder und leitet sie über UART weiter
+Empfängt nur tatsächlich gesendete LoRaWAN-Daten vom ChirpStack MQTT Forwarder 
+und leitet sie über UART weiter
 """
 
 import serial
@@ -40,22 +41,9 @@ class ChirpStackMQTTtoUART:
         if rc == 0:
             print(f"Erfolgreich mit MQTT Broker verbunden ({self.mqtt_broker}:{self.mqtt_port})")
             
-            # Subscribe zu ChirpStack Topics
-            # Gateway Events
-            client.subscribe("gateway/+/event/+")
-            print("Subscribed zu: gateway/+/event/+")
-            
-            # Application Events (uplink messages)
+            # Subscribe NUR zu Uplink-Nachrichten (tatsächlich empfangene Daten)
             client.subscribe("application/+/device/+/event/up")
-            print("Subscribed zu: application/+/device/+/event/up")
-            
-            # Device Status
-            client.subscribe("application/+/device/+/event/status")
-            print("Subscribed zu: application/+/device/+/event/status")
-            
-            # Join Events
-            client.subscribe("application/+/device/+/event/join")
-            print("Subscribed zu: application/+/device/+/event/join")
+            print("Subscribed zu: application/+/device/+/event/up (nur Uplink-Daten)")
             
         else:
             print(f"MQTT Verbindung fehlgeschlagen. Return code: {rc}")
@@ -74,113 +62,106 @@ class ChirpStackMQTTtoUART:
             # Decode payload
             payload = json.loads(msg.payload.decode('utf-8'))
             
+            # Prüfe ob es sich um echte Uplink-Daten handelt
+            if not self.is_valid_uplink_data(payload):
+                print(f"Überspringe Nachricht ohne Nutzdaten")
+                return
+            
             # Zeitstempel hinzufügen
             timestamp = datetime.now().isoformat()
             
-            # Erstelle UART Nachricht
+            # Erstelle UART Nachricht nur mit relevanten Daten
             uart_message = {
                 'timestamp': timestamp,
-                'topic': msg.topic,
-                'message_type': self.get_message_type(msg.topic),
-                'data': self.process_chirpstack_data(payload, msg.topic)
+                'type': 'uplink_data',
+                'data': self.extract_uplink_data(payload)
             }
             
             # Sende über UART
             self.send_uart(uart_message)
             
             # Log
-            print(f"\n[{timestamp}] MQTT Nachricht empfangen:")
-            print(f"  Topic: {msg.topic}")
-            print(f"  Typ: {uart_message['message_type']}")
-            
-            # Zeige relevante Daten
-            if 'deviceInfo' in payload:
-                print(f"  Device: {payload['deviceInfo'].get('devEui', 'unknown')}")
-            if 'rxInfo' in payload and payload['rxInfo']:
-                print(f"  RSSI: {payload['rxInfo'][0].get('rssi', 'N/A')} dBm")
-                print(f"  SNR: {payload['rxInfo'][0].get('snr', 'N/A')} dB")
+            print(f"\n[{timestamp}] Uplink-Daten empfangen:")
+            data = uart_message['data']
+            print(f"  Device: {data.get('dev_eui', 'unknown')}")
+            print(f"  Payload: {data.get('data_hex', 'N/A')}")
+            print(f"  RSSI: {data.get('rssi', 'N/A')} dBm")
+            print(f"  SNR: {data.get('snr', 'N/A')} dB")
             
         except Exception as e:
             print(f"Fehler beim Verarbeiten der MQTT Nachricht: {e}")
     
-    def get_message_type(self, topic):
-        """Ermittelt den Nachrichtentyp aus dem Topic"""
-        if '/event/up' in topic:
-            return 'uplink'
-        elif '/event/join' in topic:
-            return 'join'
-        elif '/event/status' in topic:
-            return 'status'
-        elif '/event/stats' in topic:
-            return 'gateway_stats'
-        elif '/event/ack' in topic:
-            return 'ack'
-        else:
-            return 'unknown'
+    def is_valid_uplink_data(self, payload):
+        """Prüft ob die Nachricht tatsächlich Uplink-Daten enthält"""
+        # Muss Uplink-Event sein
+        if not payload.get('deviceInfo'):
+            return False
+        
+        # Muss RX-Info haben (empfangen vom Gateway)
+        if not payload.get('rxInfo'):
+            return False
+        
+        # Muss Daten enthalten
+        if not payload.get('data'):
+            return False
+        
+        # Optional: Prüfe ob es sich um echte Sensordaten handelt
+        # (nicht um leere Pakete oder Heartbeats)
+        try:
+            data_bytes = base64.b64decode(payload['data'])
+            if len(data_bytes) == 0:
+                return False
+        except:
+            return False
+        
+        return True
     
-    def process_chirpstack_data(self, payload, topic):
-        """Verarbeitet ChirpStack-spezifische Daten"""
-        processed = {}
+    def extract_uplink_data(self, payload):
+        """Extrahiert nur die relevanten Uplink-Daten"""
+        data = {}
         
         # Device Info
         if 'deviceInfo' in payload:
-            processed['device'] = {
-                'dev_eui': payload['deviceInfo'].get('devEui'),
-                'device_name': payload['deviceInfo'].get('deviceName'),
-                'application_id': payload['deviceInfo'].get('applicationId'),
-                'application_name': payload['deviceInfo'].get('applicationName')
-            }
+            data['dev_eui'] = payload['deviceInfo'].get('devEui')
+            data['device_name'] = payload['deviceInfo'].get('deviceName')
+            data['application_name'] = payload['deviceInfo'].get('applicationName')
         
-        # RX Info (Empfangsqualität)
+        # Frame Info
+        data['f_cnt'] = payload.get('fCnt')
+        data['f_port'] = payload.get('fPort')
+        
+        # Payload-Daten
+        if 'data' in payload:
+            data['data_base64'] = payload['data']
+            try:
+                decoded_bytes = base64.b64decode(payload['data'])
+                data['data_hex'] = decoded_bytes.hex()
+                data['data_size'] = len(decoded_bytes)
+            except:
+                pass
+        
+        # Empfangsqualität (nur erste Gateway-Info)
         if 'rxInfo' in payload and payload['rxInfo']:
-            rx = payload['rxInfo'][0]  # Erste Gateway-Info
-            processed['rx_info'] = {
-                'gateway_id': rx.get('gatewayId'),
-                'rssi': rx.get('rssi'),
-                'snr': rx.get('snr'),
-                'channel': rx.get('channel'),
-                'rf_chain': rx.get('rfChain')
-            }
+            rx = payload['rxInfo'][0]
+            data['gateway_id'] = rx.get('gatewayId')
+            data['rssi'] = rx.get('rssi')
+            data['snr'] = rx.get('snr')
+            data['channel'] = rx.get('channel')
         
-        # TX Info (Sendeeinstellungen)
+        # Sendeeinstellungen
         if 'txInfo' in payload:
-            processed['tx_info'] = {
-                'frequency': payload['txInfo'].get('frequency'),
-                'modulation': payload['txInfo'].get('modulation', {}).get('lora', {}),
-                'data_rate': payload['txInfo'].get('dr')
-            }
+            data['frequency'] = payload['txInfo'].get('frequency')
+            if 'modulation' in payload['txInfo'] and 'lora' in payload['txInfo']['modulation']:
+                lora_mod = payload['txInfo']['modulation']['lora']
+                data['spreading_factor'] = lora_mod.get('spreadingFactor')
+                data['bandwidth'] = lora_mod.get('bandwidth')
+                data['coding_rate'] = lora_mod.get('codeRate')
         
-        # Uplink-spezifische Daten
-        if '/event/up' in topic:
-            # Frame Counter
-            processed['f_cnt'] = payload.get('fCnt')
-            processed['f_port'] = payload.get('fPort')
-            
-            # Payload-Daten
-            if 'data' in payload:
-                # Base64 decodierte Daten
-                processed['data_base64'] = payload['data']
-                try:
-                    decoded_bytes = base64.b64decode(payload['data'])
-                    processed['data_hex'] = decoded_bytes.hex()
-                    processed['data_size'] = len(decoded_bytes)
-                except:
-                    pass
-            
-            # Object (falls vorhanden - decoded payload)
-            if 'object' in payload:
-                processed['decoded_object'] = payload['object']
+        # Dekodierte Daten (falls vorhanden)
+        if 'object' in payload:
+            data['decoded_object'] = payload['object']
         
-        # Gateway Stats
-        if '/stats' in topic:
-            if 'rxPacketsReceived' in payload:
-                processed['gateway_stats'] = {
-                    'rx_packets': payload.get('rxPacketsReceived'),
-                    'rx_packets_ok': payload.get('rxPacketsReceivedOk'),
-                    'tx_packets': payload.get('txPacketsEmitted')
-                }
-        
-        return processed
+        return data
     
     def send_uart(self, data):
         """Sendet Daten über UART"""
@@ -201,10 +182,11 @@ class ChirpStackMQTTtoUART:
     
     def run(self):
         """Hauptschleife"""
-        print("\nChirpStack MQTT to UART Bridge")
+        print("\nChirpStack MQTT to UART Bridge (Nur Uplink-Daten)")
         print("=" * 50)
         print(f"MQTT Broker: {self.mqtt_broker}:{self.mqtt_port}")
         print(f"UART Port: {self.ser.port}")
+        print("Filter: Nur tatsächlich empfangene Sensor-Daten")
         print("=" * 50)
         
         try:
