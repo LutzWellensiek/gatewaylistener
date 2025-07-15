@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ChirpStack MQTT to UART Bridge - Config-basierte Version
-Sendet unformatierte Payload-Daten direkt über UART mit Konfigurationsdatei
+ChirpStack MQTT to UART Bridge - Robuste Version
+Sendet unformatierte Payload-Daten direkt über UART mit verbesserter Fehlerbehandlung
 """
 
 import serial
@@ -14,27 +14,30 @@ import logging
 import signal
 import sys
 import os
-from typing import Optional, Dict, Any
+from typing import Optional
 import threading
-from logging.handlers import RotatingFileHandler
 
 class ChirpStackMQTTtoUART:
-    def __init__(self, config_file: str = "config.json"):
-        # Konfiguration laden
-        self.config = self.load_config(config_file)
+    def __init__(self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, 
+                 uart_port: str = '/dev/ttyAMA0', uart_baudrate: int = 115200,
+                 log_level: str = "INFO"):
         
         # Logging Setup
-        self.setup_logging()
+        self.setup_logging(log_level)
         
         # Threading für graceful shutdown
         self.shutdown_event = threading.Event()
         self.setup_signal_handlers()
         
         # UART Setup
+        self.uart_port = uart_port
+        self.uart_baudrate = uart_baudrate
         self.ser = None
         self.setup_uart()
         
         # MQTT Setup
+        self.mqtt_broker = mqtt_broker
+        self.mqtt_port = mqtt_port
         self.client = None
         self.setup_mqtt()
         
@@ -43,90 +46,18 @@ class ChirpStackMQTTtoUART:
             'messages_received': 0,
             'messages_sent': 0,
             'errors': 0,
-            'last_message_time': None,
-            'start_time': time.time()
+            'last_message_time': None
         }
 
-    def load_config(self, config_file: str) -> Dict[str, Any]:
-        """Lade Konfiguration aus JSON-Datei"""
-        try:
-            with open(config_file, 'r') as f:
-                config = json.load(f)
-                print(f"Konfiguration geladen aus {config_file}")
-                return config
-        except FileNotFoundError:
-            print(f"Konfigurationsdatei {config_file} nicht gefunden, verwende Standardwerte")
-            return self.get_default_config()
-        except json.JSONDecodeError as e:
-            print(f"Fehler beim Parsen der Konfiguration: {e}")
-            return self.get_default_config()
-
-    def get_default_config(self) -> Dict[str, Any]:
-        """Standardkonfiguration"""
-        return {
-            "mqtt": {
-                "broker": "localhost",
-                "port": 1883,
-                "username": None,
-                "password": None,
-                "topic": "application/+/device/+/event/up",
-                "keepalive": 60,
-                "reconnect_delay_min": 1,
-                "reconnect_delay_max": 120
-            },
-            "uart": {
-                "port": "/dev/ttyAMA0",
-                "baudrate": 115200,
-                "bytesize": 8,
-                "parity": "none",
-                "stopbits": 1,
-                "timeout": 1,
-                "xonxoff": False,
-                "rtscts": False,
-                "dsrdtr": False,
-                "max_payload_size": 255
-            },
-            "logging": {
-                "level": "INFO",
-                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "file": "chirpstack_bridge.log",
-                "max_file_size": "10MB",
-                "backup_count": 5
-            },
-            "system": {
-                "stats_interval": 300,
-                "retry_attempts": 3,
-                "retry_delay": 0.5,
-                "graceful_shutdown_timeout": 5
-            }
-        }
-
-    def setup_logging(self):
-        """Setup strukturiertes Logging mit Rotation"""
-        log_config = self.config["logging"]
-        
-        # Parse file size
-        max_size = log_config.get("max_file_size", "10MB")
-        if max_size.endswith("MB"):
-            max_bytes = int(max_size[:-2]) * 1024 * 1024
-        else:
-            max_bytes = 10 * 1024 * 1024
-        
-        # Setup handlers
-        handlers = [logging.StreamHandler(sys.stdout)]
-        
-        if log_config.get("file"):
-            file_handler = RotatingFileHandler(
-                log_config["file"],
-                maxBytes=max_bytes,
-                backupCount=log_config.get("backup_count", 5)
-            )
-            handlers.append(file_handler)
-        
+    def setup_logging(self, log_level: str):
+        """Setup strukturiertes Logging"""
         logging.basicConfig(
-            level=getattr(logging, log_config["level"].upper()),
-            format=log_config["format"],
-            handlers=handlers
+            level=getattr(logging, log_level.upper()),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler('chirpstack_bridge.log')
+            ]
         )
         self.logger = logging.getLogger(__name__)
 
@@ -142,33 +73,23 @@ class ChirpStackMQTTtoUART:
 
     def setup_uart(self):
         """Setup UART mit Retry-Mechanismus"""
-        uart_config = self.config["uart"]
-        system_config = self.config["system"]
-        
-        max_retries = system_config["retry_attempts"]
-        retry_delay = system_config["retry_delay"]
-        
-        # Parity mapping
-        parity_map = {
-            "none": serial.PARITY_NONE,
-            "even": serial.PARITY_EVEN,
-            "odd": serial.PARITY_ODD
-        }
+        max_retries = 3
+        retry_delay = 2
         
         for attempt in range(max_retries):
             try:
                 self.ser = serial.Serial(
-                    port=uart_config["port"],
-                    baudrate=uart_config["baudrate"],
-                    bytesize=uart_config["bytesize"],
-                    parity=parity_map.get(uart_config["parity"], serial.PARITY_NONE),
-                    stopbits=uart_config["stopbits"],
-                    timeout=uart_config["timeout"],
-                    xonxoff=uart_config["xonxoff"],
-                    rtscts=uart_config["rtscts"],
-                    dsrdtr=uart_config["dsrdtr"]
+                    port=self.uart_port,
+                    baudrate=self.uart_baudrate,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=1,
+                    xonxoff=False,
+                    rtscts=False,
+                    dsrdtr=False
                 )
-                self.logger.info(f"UART initialisiert auf {uart_config['port']} mit {uart_config['baudrate']} baud")
+                self.logger.info(f"UART initialisiert auf {self.uart_port} mit {self.uart_baudrate} baud")
                 return
             except serial.SerialException as e:
                 self.logger.error(f"UART Setup Fehler (Versuch {attempt + 1}/{max_retries}): {e}")
@@ -179,31 +100,20 @@ class ChirpStackMQTTtoUART:
 
     def setup_mqtt(self):
         """Setup MQTT mit Wiederverbindung"""
-        mqtt_config = self.config["mqtt"]
-        
         self.client = mqtt.Client()
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
         
-        # Authentifizierung wenn konfiguriert
-        if mqtt_config.get("username") and mqtt_config.get("password"):
-            self.client.username_pw_set(mqtt_config["username"], mqtt_config["password"])
-        
         # Automatische Wiederverbindung aktivieren
-        self.client.reconnect_delay_set(
-            min_delay=mqtt_config["reconnect_delay_min"],
-            max_delay=mqtt_config["reconnect_delay_max"]
-        )
+        self.client.reconnect_delay_set(min_delay=1, max_delay=120)
 
     def on_connect(self, client, userdata, flags, rc):
         """MQTT Connect Callback"""
-        mqtt_config = self.config["mqtt"]
-        
         if rc == 0:
-            self.logger.info(f"Verbunden mit MQTT-Broker {mqtt_config['broker']}:{mqtt_config['port']}")
-            client.subscribe(mqtt_config["topic"])
-            self.logger.info(f"Subscribed to {mqtt_config['topic']}")
+            self.logger.info(f"Verbunden mit MQTT-Broker {self.mqtt_broker}:{self.mqtt_port}")
+            client.subscribe("application/+/device/+/event/up")
+            self.logger.info("Subscribed to application/+/device/+/event/up")
         else:
             self.logger.error(f"MQTT Verbindung fehlgeschlagen, Code: {rc}")
 
@@ -214,15 +124,12 @@ class ChirpStackMQTTtoUART:
 
     def validate_payload(self, payload: bytes) -> bool:
         """Validiere Payload vor dem Senden"""
-        uart_config = self.config["uart"]
-        max_size = uart_config["max_payload_size"]
-        
         if not payload:
             self.logger.warning("Leere Payload empfangen")
             return False
         
-        if len(payload) > max_size:
-            self.logger.warning(f"Payload zu groß: {len(payload)} Bytes (max: {max_size})")
+        if len(payload) > 255:  # Beispiel-Limit
+            self.logger.warning(f"Payload zu groß: {len(payload)} Bytes")
             return False
         
         return True
@@ -256,9 +163,7 @@ class ChirpStackMQTTtoUART:
 
     def send_to_uart(self, payload: bytes) -> bool:
         """Sende Payload an UART mit Retry-Mechanismus"""
-        system_config = self.config["system"]
-        max_retries = system_config["retry_attempts"]
-        retry_delay = system_config["retry_delay"]
+        max_retries = 3
         
         for attempt in range(max_retries):
             try:
@@ -279,7 +184,7 @@ class ChirpStackMQTTtoUART:
             except serial.SerialException as e:
                 self.logger.error(f"UART Fehler (Versuch {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
+                    time.sleep(0.5)
                     try:
                         self.ser.close()
                     except:
@@ -332,25 +237,15 @@ class ChirpStackMQTTtoUART:
             self.stats['errors'] += 1
 
     def print_stats(self):
-        """Drucke erweiterte Statistiken"""
-        uptime = time.time() - self.stats['start_time']
-        uptime_str = time.strftime("%H:%M:%S", time.gmtime(uptime))
-        
-        self.logger.info(f"Statistiken - Uptime: {uptime_str}, "
-                        f"Empfangen: {self.stats['messages_received']}, "
-                        f"Gesendet: {self.stats['messages_sent']}, "
-                        f"Fehler: {self.stats['errors']}")
+        """Drucke Statistiken"""
+        self.logger.info(f"Statistiken: Empfangen={self.stats['messages_received']}, "
+                        f"Gesendet={self.stats['messages_sent']}, "
+                        f"Fehler={self.stats['errors']}")
 
     def connect_mqtt(self):
         """Verbinde mit MQTT-Broker"""
-        mqtt_config = self.config["mqtt"]
-        
         try:
-            self.client.connect(
-                mqtt_config["broker"], 
-                mqtt_config["port"], 
-                mqtt_config["keepalive"]
-            )
+            self.client.connect(self.mqtt_broker, self.mqtt_port, 60)
             return True
         except Exception as e:
             self.logger.error(f"MQTT Verbindung fehlgeschlagen: {e}")
@@ -367,7 +262,7 @@ class ChirpStackMQTTtoUART:
         
         # Statistik-Timer
         last_stats_time = time.time()
-        stats_interval = self.config["system"]["stats_interval"]
+        stats_interval = 300  # 5 Minuten
         
         try:
             while not self.shutdown_event.is_set():
@@ -389,8 +284,6 @@ class ChirpStackMQTTtoUART:
         """Cleanup-Routine für graceful shutdown"""
         self.logger.info("Cleanup wird ausgeführt...")
         
-        timeout = self.config["system"]["graceful_shutdown_timeout"]
-        
         try:
             if self.client:
                 self.client.disconnect()
@@ -408,8 +301,18 @@ class ChirpStackMQTTtoUART:
         self.logger.info("Bridge gestoppt")
 
 if __name__ == "__main__":
-    # Config-Datei über Kommandozeile oder Standard
-    config_file = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    # Konfiguration über Environment-Variablen
+    mqtt_broker = os.getenv('MQTT_BROKER', 'localhost')
+    mqtt_port = int(os.getenv('MQTT_PORT', '1883'))
+    uart_port = os.getenv('UART_PORT', '/dev/ttyAMA0')
+    uart_baudrate = int(os.getenv('UART_BAUDRATE', '115200'))
+    log_level = os.getenv('LOG_LEVEL', 'INFO')
     
-    bridge = ChirpStackMQTTtoUART(config_file)
+    bridge = ChirpStackMQTTtoUART(
+        mqtt_broker=mqtt_broker,
+        mqtt_port=mqtt_port,
+        uart_port=uart_port,
+        uart_baudrate=uart_baudrate,
+        log_level=log_level
+    )
     bridge.run()
