@@ -9,6 +9,7 @@ import serial
 import json
 import time
 import threading
+import struct
 from datetime import datetime
 
 class RaspberryToAVRUART:
@@ -44,35 +45,68 @@ class RaspberryToAVRUART:
             # Flag für kontinuierlichen Betrieb
             self.running = False
             
+            # Input-IDs für RS485-Frames (kompatibel mit AVR-Board)
+            self.input_ids = {
+                'temp1': 0x01,
+                'temp2': 0x02,
+                'deflection': 0x03,
+                'pressure': 0x04,
+                'deflection_2': 0x05,
+                'internal_temp': 0x09
+            }
+            
+            # Standardwerte für fehlende Sensordaten
+            self.default_sensor_values = {
+                'temp1': 20.0,      # °C
+                'temp2': 20.0,      # °C
+                'deflection': 0.0,  # °
+                'pressure': 0.0,    # bar
+                'deflection_2': 0.0, # °
+                'internal_temp': 25.0  # °C
+            }
+            
         except Exception as e:
             print(f"Fehler beim Initialisieren der UART-Verbindung: {e}")
             raise
     
     def send_sensor_data(self, sensor_data):
         """
-        Sendet Sensordaten an das AVR-Board
+        Sendet Sensordaten an das AVR-Board im RS485-Frame-Format
         
         Args:
-            sensor_data (list): Array mit Sensordaten (d-Array Format)
+            sensor_data (dict oder list): Sensordaten als Dictionary oder Array
         """
         try:
-            # Erstelle Datenpaket im JSON-Format
-            data_packet = {
-                "timestamp": datetime.now().isoformat(),
-                "type": "sensor_data",
-                "data": sensor_data
-            }
+            # Normalisiere Eingabedaten
+            if isinstance(sensor_data, list):
+                # Konvertiere Array in Dictionary
+                normalized_data = {
+                    'temp1': sensor_data[0] if len(sensor_data) > 0 else None,
+                    'temp2': sensor_data[1] if len(sensor_data) > 1 else None,
+                    'deflection': sensor_data[2] if len(sensor_data) > 2 else None,
+                    'pressure': sensor_data[3] if len(sensor_data) > 3 else None,
+                    'deflection_2': sensor_data[4] if len(sensor_data) > 4 else None
+                }
+            else:
+                normalized_data = sensor_data
             
-            # Konvertiere zu JSON und füge Zeilenendezeichen hinzu
-            json_data = json.dumps(data_packet, separators=(',', ':'))
-            message = json_data + '\n'
+            # Fülle fehlende Sensordaten mit Platzhaltern
+            complete_sensor_data = {}
+            for key in self.default_sensor_values:
+                if key in normalized_data and normalized_data[key] is not None:
+                    complete_sensor_data[key] = normalized_data[key]
+                else:
+                    complete_sensor_data[key] = self.default_sensor_values[key]
+                    print(f"  Platzhalter für {key}: {self.default_sensor_values[key]}")
             
-            # Sende über UART
-            self.ser.write(message.encode('utf-8'))
-            self.ser.flush()
+            # Sende jeden Sensorwert als separaten RS485-Frame
+            for sensor_type, value in complete_sensor_data.items():
+                if sensor_type in self.input_ids:
+                    self.send_rs485_frame(self.input_ids[sensor_type], value)
+                    time.sleep(0.05)  # Kurze Pause zwischen Frames
             
             self.messages_sent += 1
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] UART gesendet ({len(message)} bytes): {json_data}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Sensordaten gesendet: {complete_sensor_data}")
             
             return True
             
