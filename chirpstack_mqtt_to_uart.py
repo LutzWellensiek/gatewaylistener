@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-ChirpStack MQTT to UART Bridge - Binäre Sensordaten
-Sendet Sensordaten (d-Array) als binäre 4-Byte-Pakete über UART
-Format: [Input-ID, High-Byte, Low-Byte, CRC8]
+ChirpStack MQTT to UART Bridge - Nur Sensordaten
+Sendet nur die Sensordaten (d-Array) über UART
 """
 
 import serial
@@ -11,7 +10,6 @@ import json
 import time
 import base64
 from datetime import datetime
-import struct
 
 class ChirpStackMQTTtoUART:
     def __init__(self, mqtt_broker="localhost", mqtt_port=1883, 
@@ -121,91 +119,29 @@ class ChirpStackMQTTtoUART:
         
         return None
     
-    def calculate_crc8(self, data):
-        """
-        CRC8 Berechnung mit Dallas/Maxim Polynom 0x31
-        """
-        crc = 0x00
-        for byte in data:
-            crc ^= byte
-            for _ in range(8):
-                if crc & 0x80:
-                    crc = (crc << 1) ^ 0x31
-                else:
-                    crc = crc << 1
-                crc &= 0xFF
-        return crc
-    
-    def create_sensor_packet(self, input_id, sensor_value):
-        """
-        Erstellt ein 4-Byte-Paket für einen Sensorwert
-        Format: [Input-ID, High-Byte, Low-Byte, CRC8]
-        """
-        # Sensor-Wert auf 12 Bit begrenzen
-        sensor_value = sensor_value & 0x0FFF
-        
-        # Aufteilen in High- und Low-Byte
-        high_byte = (sensor_value >> 8) & 0xFF
-        low_byte = sensor_value & 0xFF
-        
-        # CRC8 über die ersten 3 Bytes berechnen
-        data_bytes = [input_id, high_byte, low_byte]
-        crc8 = self.calculate_crc8(data_bytes)
-        
-        # 4-Byte-Paket erstellen
-        packet = bytes([input_id, high_byte, low_byte, crc8])
-        
-        return packet
-    
     def send_uart(self, data):
         try:
-            total_bytes_sent = 0
-            packets_sent = 0
+            # Konvertiere Array zu JSON
+            json_data = json.dumps(data, separators=(',', ':'))
+            message = json_data + '\n'
             
-            # Für jeden Wert im d-Array ein separates 4-Byte-Paket senden
-            for index, sensor_value in enumerate(data):
-                # Input-ID: 1-basiert (1 für ersten Wert, 2 für zweiten, etc.)
-                input_id = index + 1
-                
-                # Stelle sicher, dass der Wert ein Integer ist
-                if isinstance(sensor_value, (int, float)):
-                    sensor_value = int(sensor_value)
-                else:
-                    print(f"Warnung: Ungültiger Sensorwert an Index {index}: {sensor_value}")
-                    continue
-                
-                # Erstelle 4-Byte-Paket
-                packet = self.create_sensor_packet(input_id, sensor_value)
-                
-                # Sende Paket über UART
-                self.ser.write(packet)
-                self.ser.flush()
-                
-                total_bytes_sent += 4
-                packets_sent += 1
-                
-                # Debug-Ausgabe
-                print(f"  -> Paket {packets_sent}: ID={input_id}, Wert={sensor_value} (0x{sensor_value:03X}), "
-                      f"Bytes=[{packet[0]:02X} {packet[1]:02X} {packet[2]:02X} {packet[3]:02X}]")
-                
-                # Kleine Verzögerung zwischen Paketen (optional)
-                time.sleep(0.001)
+            # Sende über UART
+            self.ser.write(message.encode('utf-8'))
+            self.ser.flush()
             
-            self.messages_sent += packets_sent
-            print(f"  -> UART: {packets_sent} Pakete gesendet ({total_bytes_sent} bytes total)")
+            self.messages_sent += 1
+            print(f"  -> UART gesendet ({len(message)} bytes): {json_data}")
             
         except Exception as e:
             print(f"Fehler beim Senden über UART: {e}")
     
     def run(self):
-        print("\nChirpStack MQTT to UART Bridge (Binäre Sensordaten)")
-        print("=" * 55)
+        print("\nChirpStack MQTT to UART Bridge (Nur Sensordaten)")
+        print("=" * 50)
         print(f"MQTT Broker: {self.mqtt_broker}:{self.mqtt_port}")
         print(f"UART Port: {self.ser.port}")
-        print("Filter: 'd' Array aus Sensordaten")
-        print("Format: 4-Byte-Pakete [Input-ID, High-Byte, Low-Byte, CRC8]")
-        print("CRC8: Dallas/Maxim Polynom 0x31")
-        print("=" * 55)
+        print("Filter: Nur 'd' Array aus Sensordaten")
+        print("=" * 50)
         
         try:
             self.client.connect(self.mqtt_broker, self.mqtt_port, 60)
