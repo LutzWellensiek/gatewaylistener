@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ChirpStack MQTT to UART Bridge - Config-basierte Version
-Sendet unformatierte Payload-Daten direkt über UART mit Konfigurationsdatei
+Sendet Payload-Daten inklusive Device Name über UART
 """
 
 import serial
@@ -212,6 +212,19 @@ class ChirpStackMQTTtoUART:
         if rc != 0:
             self.logger.warning(f"Unerwartete MQTT Trennung, Code: {rc}")
 
+    def extract_device_name(self, topic: str) -> str:
+        """Extrahiere Device Name aus MQTT Topic"""
+        try:
+            topic_parts = topic.split('/')
+            # Format: application/{app_id}/device/{device_id}/event/up
+            if len(topic_parts) >= 4:
+                return topic_parts[3]
+            else:
+                return "unknown"
+        except Exception as e:
+            self.logger.warning(f"Fehler beim Extrahieren des Device Names: {e}")
+            return "unknown"
+
     def validate_payload(self, payload: bytes) -> bool:
         """Validiere Payload vor dem Senden"""
         uart_config = self.config["uart"]
@@ -254,8 +267,18 @@ class ChirpStackMQTTtoUART:
             self.logger.error(f"Fehler beim Dekodieren der Payload: {e}")
             return None
 
-    def send_to_uart(self, payload: bytes) -> bool:
-        """Sende Payload an UART mit Retry-Mechanismus"""
+    def create_uart_message(self, device_name: str, payload: bytes) -> bytes:
+        """Erstelle UART-Nachricht mit Device Name und Payload"""
+        try:
+            # Format: DEVICE_NAME:PAYLOAD_HEX\n
+            message = f"{device_name}:{payload.hex()}\n"
+            return message.encode('utf-8')
+        except Exception as e:
+            self.logger.error(f"Fehler beim Erstellen der UART-Nachricht: {e}")
+            return None
+
+    def send_to_uart(self, message: bytes) -> bool:
+        """Sende Nachricht an UART mit Retry-Mechanismus"""
         system_config = self.config["system"]
         max_retries = system_config["retry_attempts"]
         retry_delay = system_config["retry_delay"]
@@ -266,15 +289,15 @@ class ChirpStackMQTTtoUART:
                     self.logger.warning("UART nicht verfügbar, versuche Wiederverbindung...")
                     self.setup_uart()
                 
-                bytes_written = self.ser.write(payload)
+                bytes_written = self.ser.write(message)
                 self.ser.flush()
                 
-                if bytes_written == len(payload):
+                if bytes_written == len(message):
                     self.logger.info(f"{bytes_written} Bytes erfolgreich an UART gesendet")
                     self.stats['messages_sent'] += 1
                     return True
                 else:
-                    self.logger.warning(f"Nur {bytes_written}/{len(payload)} Bytes gesendet")
+                    self.logger.warning(f"Nur {bytes_written}/{len(message)} Bytes gesendet")
                     
             except serial.SerialException as e:
                 self.logger.error(f"UART Fehler (Versuch {attempt + 1}/{max_retries}): {e}")
@@ -296,12 +319,16 @@ class ChirpStackMQTTtoUART:
         return False
 
     def on_message(self, client, userdata, msg):
-        """MQTT Message Callback mit verbesserter Fehlerbehandlung"""
+        """MQTT Message Callback mit Device Name Integration"""
         try:
             self.stats['messages_received'] += 1
             self.stats['last_message_time'] = time.time()
             
             self.logger.info(f"MQTT Nachricht erhalten: {msg.topic}")
+            
+            # Extrahiere Device Name aus Topic
+            device_name = self.extract_device_name(msg.topic)
+            self.logger.info(f"Device Name: {device_name}")
             
             # JSON parsen
             json_data = json.loads(msg.payload)
@@ -313,14 +340,22 @@ class ChirpStackMQTTtoUART:
                 self.stats['errors'] += 1
                 return
             
-            # Payload validieren
-            if not self.validate_payload(payload):
-                self.logger.error("Payload-Validierung fehlgeschlagen")
+            # UART-Nachricht erstellen (Device Name + Payload)
+            uart_message = self.create_uart_message(device_name, payload)
+            if uart_message is None:
+                self.logger.error("UART-Nachricht konnte nicht erstellt werden")
+                self.stats['errors'] += 1
+                return
+            
+            # Nachricht validieren
+            if not self.validate_payload(uart_message):
+                self.logger.error("UART-Nachricht-Validierung fehlgeschlagen")
                 self.stats['errors'] += 1
                 return
             
             # An UART senden
-            if not self.send_to_uart(payload):
+            self.logger.info(f"Sende an UART: {uart_message.decode('utf-8').strip()}")
+            if not self.send_to_uart(uart_message):
                 self.logger.error("Fehler beim Senden an UART")
                 self.stats['errors'] += 1
                 
@@ -358,7 +393,7 @@ class ChirpStackMQTTtoUART:
 
     def run(self):
         """Hauptlauf mit verbesserter Fehlerbehandlung"""
-        self.logger.info("ChirpStack MQTT to UART Bridge gestartet...")
+        self.logger.info("ChirpStack MQTT to UART Bridge mit Device Name gestartet...")
         
         # MQTT verbinden
         if not self.connect_mqtt():
