@@ -268,11 +268,13 @@ class ChirpStackMQTTtoUART:
             return None
 
     def create_uart_message(self, device_name: str, payload: bytes) -> bytes:
-        """Erstelle UART-Nachricht mit Device Name und Payload"""
+        """Erstelle UART-Nachricht mit Device Name und binären Daten"""
         try:
-            # Format: DEVICE_NAME:PAYLOAD_HEX\n
-            message = f"{device_name}:{payload.hex()}\n"
-            return message.encode('utf-8')
+            # Format: DEVICE_NAME: + binäre Payload-Daten
+            # Device Name als UTF-8 String + Doppelpunkt + Leerzeichen + binäre Daten
+            device_prefix = f"{device_name}: ".encode('utf-8')
+            message = device_prefix + payload
+            return message
         except Exception as e:
             self.logger.error(f"Fehler beim Erstellen der UART-Nachricht: {e}")
             return None
@@ -354,7 +356,13 @@ class ChirpStackMQTTtoUART:
                 return
             
             # An UART senden
-            self.logger.info(f"Sende an UART: {uart_message.decode('utf-8').strip()}")
+            try:
+                # Log nur den Device-Namen, nicht die binären Daten
+                self.logger.info(f"Sende an UART: {device_name} ({len(payload)} Bytes binäre Daten)")
+                self.logger.debug(f"Payload (Hex): {payload.hex()}")
+            except:
+                self.logger.info(f"Sende an UART: {device_name} (binäre Daten)")
+                
             if not self.send_to_uart(uart_message):
                 self.logger.error("Fehler beim Senden an UART")
                 self.stats['errors'] += 1
