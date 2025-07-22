@@ -1,5 +1,247 @@
 # ChirpStack MQTT to UART Bridge
 
+## Übersicht
+
+Diese Anwendung fungiert als Brücke zwischen ChirpStack (LoRaWAN Network Server) und UART-Geräten. Sie empfängt MQTT-Nachrichten von ChirpStack, dekodiert die Payloads und leitet sie über eine serielle Schnittstelle (UART) weiter.
+
+## Funktionsweise
+
+### Vereinfachter Pseudocode
+
+```
+STARTE Programm
+├── LADE Konfiguration aus config.json
+├── INITIALISIERE Logging-System
+├── RICHTE Signal-Handler ein (für sauberes Beenden)
+├── VERBINDE mit UART-Schnittstelle
+├── VERBINDE mit MQTT-Broker
+│
+└── HAUPTSCHLEIFE (läuft bis Programm beendet wird):
+    ├── WARTE auf MQTT-Nachrichten
+    ├── WENN Nachricht empfangen:
+    │   ├── EXTRAHIERE Device-Name aus Topic
+    │   ├── DEKODIERE JSON-Payload
+    │   ├── DEKODIERE Base64-Daten
+    │   ├── PRÜFE ob doppelt kodiert (ASCII-Hex)
+    │   ├── ERSTELLE UART-Nachricht: "DeviceName: [Binärdaten]"
+    │   ├── VALIDIERE Nachrichtengröße
+    │   └── SENDE über UART
+    │
+    └── ALLE 5 Minuten:
+        └── ZEIGE Statistiken (empfangen/gesendet/Fehler)
+```
+
+## Hauptkomponenten
+
+### 1. **Konfigurationsverwaltung**
+- Lädt Einstellungen aus `config.json`
+- Verwendet Standardwerte, falls Datei fehlt
+
+### 2. **MQTT-Client**
+- Verbindet sich mit ChirpStack MQTT-Broker
+- Abonniert Topics im Format: `application/+/device/+/event/up`
+- Automatische Wiederverbindung bei Verbindungsabbruch
+
+### 3. **UART-Kommunikation**
+- Serielle Verbindung zu externen Geräten
+- Retry-Mechanismus bei Verbindungsfehlern
+- Unterstützt verschiedene Baudrates und Konfigurationen
+
+### 4. **Payload-Verarbeitung**
+- Base64-Dekodierung der ChirpStack-Daten
+- Erkennung und Behandlung doppelt kodierter Daten (ASCII-Hex)
+- Validierung der Payload-Größe
+
+### 5. **Fehlerbehandlung & Logging**
+- Strukturiertes Logging mit Rotation
+- Graceful Shutdown bei SIGINT/SIGTERM
+- Statistiken über verarbeitete Nachrichten
+
+## Installation
+
+### Voraussetzungen
+
+- Python 3.6+
+- pip (Python Package Manager)
+
+### Abhängigkeiten installieren
+
+```bash
+pip install pyserial paho-mqtt
+```
+
+## Konfiguration
+
+Erstellen Sie eine `config.json` Datei:
+
+```json
+{
+    "mqtt": {
+        "broker": "localhost",
+        "port": 1883,
+        "username": null,
+        "password": null,
+        "topic": "application/+/device/+/event/up",
+        "keepalive": 60,
+        "reconnect_delay_min": 1,
+        "reconnect_delay_max": 120
+    },
+    "uart": {
+        "port": "/dev/ttyAMA0",
+        "baudrate": 115200,
+        "bytesize": 8,
+        "parity": "none",
+        "stopbits": 1,
+        "timeout": 1,
+        "xonxoff": false,
+        "rtscts": false,
+        "dsrdtr": false,
+        "max_payload_size": 255
+    },
+    "logging": {
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file": "chirpstack_bridge.log",
+        "max_file_size": "10MB",
+        "backup_count": 5
+    },
+    "system": {
+        "stats_interval": 300,
+        "retry_attempts": 3,
+        "retry_delay": 0.5,
+        "graceful_shutdown_timeout": 5
+    }
+}
+```
+
+### Konfigurationsparameter
+
+#### MQTT-Einstellungen
+- `broker`: MQTT-Broker Adresse
+- `port`: MQTT-Port (Standard: 1883)
+- `username/password`: Authentifizierung (optional)
+- `topic`: MQTT-Topic-Pattern für ChirpStack-Nachrichten
+
+#### UART-Einstellungen
+- `port`: Serieller Port (Linux: `/dev/ttyAMA0`, Windows: `COM3`)
+- `baudrate`: Übertragungsgeschwindigkeit (z.B. 9600, 115200)
+- `max_payload_size`: Maximale Nachrichtengröße in Bytes
+
+#### System-Einstellungen
+- `stats_interval`: Intervall für Statistik-Ausgabe (Sekunden)
+- `retry_attempts`: Anzahl Wiederholungsversuche bei Fehlern
+
+## Verwendung
+
+### Starten der Anwendung
+
+```bash
+# Mit Standard-Konfiguration (config.json)
+python chirpstack_mqtt_to_uart.py
+
+# Mit eigener Konfigurationsdatei
+python chirpstack_mqtt_to_uart.py my_config.json
+```
+
+### Beenden der Anwendung
+
+- `Ctrl+C` für sauberes Herunterfahren
+- Die Anwendung beendet alle Verbindungen ordnungsgemäß
+
+## Datenfluss
+
+```
+ChirpStack Server
+    │
+    ├── Sendet LoRaWAN-Daten via MQTT
+    │
+    ▼
+MQTT Broker
+    │
+    ├── Topic: application/{app}/device/{dev}/event/up
+    │
+    ▼
+Diese Bridge-Anwendung
+    │
+    ├── 1. Empfängt MQTT-Nachricht
+    ├── 2. Extrahiert Device-ID aus Topic
+    ├── 3. Dekodiert Base64-Payload
+    ├── 4. Formatiert: "DeviceID: [Payload]"
+    │
+    ▼
+UART-Schnittstelle
+    │
+    ▼
+Angeschlossenes Gerät (z.B. Mikrocontroller)
+```
+
+## Nachrichtenformat
+
+### Eingehend (MQTT)
+```json
+{
+    "applicationID": "123",
+    "deviceName": "sensor-01",
+    "data": "SGVsbG8gV29ybGQ=",  // Base64 kodiert
+    "fCnt": 42,
+    "fPort": 1
+}
+```
+
+### Ausgehend (UART)
+```
+sensor-01: [Binäre Payload-Daten]
+```
+
+## Fehlerbehandlung
+
+Die Anwendung behandelt folgende Fehlerszenarien:
+
+1. **MQTT-Verbindungsfehler**: Automatische Wiederverbindung
+2. **UART-Fehler**: Retry-Mechanismus mit konfigurierbaren Versuchen
+3. **Ungültige Payloads**: Werden geloggt und übersprungen
+4. **Zu große Nachrichten**: Werden abgelehnt (max_payload_size)
+
+## Logging
+
+- **Konsole**: Echtzeitausgabe der Aktivitäten
+- **Datei**: Rotierendes Log mit konfigurierbarer Größe
+- **Level**: DEBUG, INFO, WARNING, ERROR
+
+### Log-Beispiel
+```
+2024-01-22 10:15:23 - __main__ - INFO - MQTT Nachricht erhalten: application/1/device/sensor-01/event/up
+2024-01-22 10:15:23 - __main__ - INFO - Device Name: sensor-01
+2024-01-22 10:15:23 - __main__ - INFO - Sende an UART: sensor-01 (12 Bytes binäre Daten)
+2024-01-22 10:15:23 - __main__ - INFO - 20 Bytes erfolgreich an UART gesendet
+```
+
+## Troubleshooting
+
+### Problem: "UART nicht verfügbar"
+- Prüfen Sie die Portbezeichnung in der Konfiguration
+- Stellen Sie sicher, dass der Benutzer Zugriff auf den seriellen Port hat
+- Linux: `sudo usermod -a -G dialout $USER`
+
+### Problem: "MQTT Verbindung fehlgeschlagen"
+- Überprüfen Sie Broker-Adresse und Port
+- Prüfen Sie Firewall-Einstellungen
+- Verifizieren Sie Username/Password falls verwendet
+
+### Problem: "Payload zu groß"
+- Erhöhen Sie `max_payload_size` in der Konfiguration
+- Prüfen Sie die gesendeten Daten auf unerwartete Größe
+
+## Lizenz
+
+[Ihre Lizenz hier]
+
+## Autor
+
+[Ihr Name/Organisation]
+
+# ChirpStack MQTT to UART Bridge
+
 Der ChirpStack MQTT to UART Bridge ist eine Python-basierte Lösung, die MQTT-Nachrichten abhört und dekodierte Payload-Daten zusammen mit dem Device-Namen über UART sendet. Diese Bridge ist besonders nützlich für Anwendungen mit LoRaWAN-Geräten, die über UART-Schnittstellen kommunizieren.
 
 ## Features
