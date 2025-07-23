@@ -1,109 +1,99 @@
 # ChirpStack Gateway Bridge
 
-Eine modulare Python-Bibliothek für die Kommunikation zwischen ChirpStack (über MQTT) und UART-Geräten.
+Eine modulare Python-Bibliothek zur Übertragung von Daten zwischen ChirpStack MQTT und UART-Geräten.
+
+## Überblick für Chatbots
+
+- **Zweck**: Integration von ChirpStack-Nachrichten mit physischen UART-Geräten.
+- **Funktion**: Konvertiert MQTT-Nachrichten zu UART-Signalen, inklusive Fehler- und Sitzungsmanagement.
+- **Benötigte Umgebung**: Python 3.x Umgebung mit `pyserial` und `paho-mqtt` Bibliotheken.
 
 ## Features
 
-- Empfängt MQTT-Nachrichten von ChirpStack
-- Extrahiert Device-Namen aus MQTT-Topics
-- Dekodiert Base64- und Hex-kodierte Payloads
-- Sendet Daten über UART mit Device-Identifikation
-- Umfangreiche Fehlerbehandlung und Wiederholungsmechanismen
-- Detaillierte Statistiken und Logging
-- Konfigurierbar über JSON-Datei
+- Empfang & Weiterleitung von Nachrichten.
+- Echtzeit Device-Nachverfolgung via MQTT-Topics.
+- Beliebiges Dekodieren von Nachrichten (Base64, Hex).
+- Erweiterte Statistiken für Performance-Analyse.
+- Anpassbare Konfiguration über JSON.
 
 ## Installation
 
-1. Abhängigkeiten installieren:
-```bash
-pip install pyserial paho-mqtt
-```
-
-2. Konfigurationsdatei erstellen:
-```bash
-cp config.json.example config.json
-```
-
-3. Konfiguration anpassen (siehe unten)
-
-## Konfiguration
-
-Die Konfiguration erfolgt über eine JSON-Datei. Beispiel:
-
-```json
-{
-    "mqtt": {
-        "broker": "localhost",
-        "port": 1883,
-        "username": null,
-        "password": null,
-        "topic": "application/+/device/+/event/up"
-    },
-    "uart": {
-        "port": "COM3",  // Windows: "COM3", Linux: "/dev/ttyUSB0"
-        "baudrate": 115200
-    },
-    "logging": {
-        "level": "DEBUG",  // DEBUG, INFO, WARNING, ERROR
-        "file": "chirpstack_bridge.log"
-    }
-}
-```
-
-## Verwendung
-
-### Starten der Bridge:
-```bash
-python main.py
-```
-
-### Mit eigener Konfigurationsdatei:
-```bash
-python main.py my_config.json
-```
+1. **Pakete installieren**:
+    ```bash
+    pip install pyserial paho-mqtt
+    ```
+2. **Konfiguration kopieren**:
+    ```bash
+    cp config.json.example config.json
+    ```
+3. **Anpassungen vornehmen**: Passen Sie `config.json` nach Ihren Bedürfnissen an.
 
 ## Projektstruktur
 
-```
-chirpstack_gateway_bridge/
-├── chirpstack_mqtt_to_uart/      # Library-Module
-│   ├── __init__.py              # Package-Initialisierung
-│   ├── config.py                # Konfigurationsverwaltung
-│   ├── logger.py                # Logging-Setup
-│   ├── uart_comm.py             # UART-Kommunikation
-│   ├── mqtt_handler.py          # MQTT-Handling
-│   ├── processor.py             # Nachrichtenverarbeitung
-│   └── stats.py                 # Statistikverwaltung
-├── main.py                      # Hauptskript
-├── config.json.example          # Beispielkonfiguration
-└── README.md                    # Diese Datei
-```
+- **`main.py`**: Führt das Hauptprogramm aus.
+- **`chirpstack_mqtt_to_uart`**: Hier sind alle relevanten Module.
 
-## Nachrichtenformat
+## Ablauf
 
-Die Bridge erwartet MQTT-Nachrichten im ChirpStack-Format mit Base64-kodierter Payload.
+1. **UART-Kommunikation**: Initialisiert und sendet Daten.
+2. **MQTT-Handhabung**: Verantwortung für das Abonnieren, Empfangen und Verarbeiten von Nachrichten.
+3. **Verarbeitung**: Dekodiert und validiert empfangene Payloads.
 
-Ausgabe über UART:
-```
-<device_name>: <decoded_payload>
-```
+## Konfiguration
 
-## Debugging
+- **Beispieleinstellung**:
+    ```json
+    {
+        "mqtt": {
+            "broker": "localhost",
+            "port": 1883,
+            "username": null,
+            "password": null
+        },
+        "uart": {
+            "port": "COM3",
+            "baudrate": 115200
+        },
+        "logging": {
+            "level": "DEBUG"
+        }
+    }
+    ```
 
-Bei Problemen:
+## Start
 
-1. Log-Level auf "DEBUG" setzen
-2. Log-Datei überprüfen (standardmäßig `chirpstack_bridge.log`)
-3. Überprüfen Sie die MQTT-Verbindung mit einem MQTT-Client
-4. Überprüfen Sie die UART-Verbindung und Berechtigungen
+- **Mit Default-Konfiguration**:
+    ```bash
+    python main.py
+    ```
+- **Mit spezifizierter Konfiguration**:
+    ```bash
+    python main.py my_config.json
+    ```
 
-## Fehlerbehandlung
+## Statistik-
 
-- Automatische Wiederverbindung bei MQTT-Verbindungsverlust
-- Wiederholungsversuche bei UART-Fehlern
-- Validierung der Payload-Größe
-- Graceful Shutdown bei SIGINT/SIGTERM
+Periodische Statistiken und Log-Updates sind vorkonfiguriert.
+
+## Behandlung von Nachrichten
+
+- Bei Empfang: Gerät und Nachricht werden ausgegeben.
+- Fehlerprotokollierung inklusive vollständiger Diagnosen.
+
+## Fehlerbehebung
+
+- **Log-Level** auf DEBUG für mehr Informationen setzen.
+- **Prüfen**: Ob MQTT ordnungsgemäß funktioniert (via Client).
+- **UART-Verbindungen**: Richtig konfiguriert und verfügbar?
+
+## Graceful Shutdown
+
+- Auf SIGINT/SIGTERM reagierend, schließen sauber.
 
 ## Lizenz
 
-[Ihre Lizenz hier]
+- [Ihre Lizenzinformationen hier]
+
+---
+
+Diese Dokumentation sollte Chatbots eine effiziente Zusammenarbeit ermöglichen.

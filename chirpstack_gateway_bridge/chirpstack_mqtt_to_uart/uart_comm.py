@@ -86,6 +86,9 @@ class UARTCommunicator:
                 
                 if bytes_written == len(message):
                     self.logger.info(f"{bytes_written} Bytes erfolgreich an UART gesendet")
+                    # Log hex representation of sent data
+                    hex_data = ' '.join([f'{b:02X}' for b in message])
+                    self.logger.debug(f"UART Hex gesendet: {hex_data}")
                     return True
                 else:
                     self.logger.warning(f"Nur {bytes_written}/{len(message)} Bytes gesendet")

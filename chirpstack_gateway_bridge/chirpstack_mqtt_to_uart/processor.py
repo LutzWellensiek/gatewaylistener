@@ -57,7 +57,7 @@ class MessageProcessor:
         """
         try:
             decoded_payload = base64.b64decode(json_data['data'])
-            self.logger.debug(f"Base64 dekodiert ({len(decoded_payload)} Bytes): {decoded_payload.hex()}")
+            self.logger.debug(f"Base64 dekodiert ({len(decoded_payload)} Bytes)")
 
             final_payload = self._check_double_encoding(decoded_payload)
             return final_payload

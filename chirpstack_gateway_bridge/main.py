@@ -47,6 +47,10 @@ def main(config_file="config.json"):
                 stats_manager.increment_errors()
                 return
                 
+            # Log decoded payload in hex format
+            payload_hex = ' '.join([f'{b:02X}' for b in decoded_payload])
+            logger.info(f"Decoded payload ({len(decoded_payload)} bytes): {payload_hex}")
+                
             # Validate payload
             if not message_processor.validate_payload(decoded_payload):
                 logger.error("Payload validation failed")
