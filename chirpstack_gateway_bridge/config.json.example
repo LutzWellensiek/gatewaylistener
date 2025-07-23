@@ -1,0 +1,37 @@
+{
+    "mqtt": {
+        "broker": "localhost",
+        "port": 1883,
+        "username": null,
+        "password": null,
+        "topic": "application/+/device/+/event/up",
+        "keepalive": 60,
+        "reconnect_delay_min": 1,
+        "reconnect_delay_max": 120
+    },
+    "uart": {
+        "port": "COM3",
+        "baudrate": 115200,
+        "bytesize": 8,
+        "parity": "none",
+        "stopbits": 1,
+        "timeout": 1,
+        "xonxoff": false,
+        "rtscts": false,
+        "dsrdtr": false,
+        "max_payload_size": 255
+    },
+    "logging": {
+        "level": "DEBUG",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file": "chirpstack_bridge.log",
+        "max_file_size": "10MB",
+        "backup_count": 5
+    },
+    "system": {
+        "stats_interval": 300,
+        "retry_attempts": 3,
+        "retry_delay": 0.5,
+        "graceful_shutdown_timeout": 5
+    }
+}
